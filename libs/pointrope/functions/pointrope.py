@@ -1,4 +1,5 @@
 import torch
+from torch.autograd import Function
 
 try:
     import pointrope_cuda as _kernels  # run `python setup.py install`
@@ -8,9 +9,19 @@ except ModuleNotFoundError:
     )
 
 
-class PointROPE_func(torch.autograd.Function):
+class PointROPE_func(Function):
     @staticmethod
-    def forward(ctx, tokens, positions, base, F0=1):
+    def symbolic(g, tokens, positions, base, F0=1.0):
+        return g.op(
+            "litept::PointROPE",
+            tokens,
+            positions,
+            base_f=float(base),
+            f0_f=float(F0),
+        )
+
+    @staticmethod
+    def forward(ctx, tokens, positions, base, F0=1.0):
         ctx.save_for_backward(positions)
         ctx.saved_base = base
         ctx.saved_F0 = F0
