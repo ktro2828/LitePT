@@ -1,9 +1,10 @@
 from functools import partial
 
 import flash_attn
-import spconv.pytorch as spconv
 import torch
 import torch.nn as nn
+from timm.layers import DropPath
+
 from libs.pointrope import PointROPE
 from litept.models.builder import MODELS
 from litept.models.modules import (
@@ -13,8 +14,8 @@ from litept.models.modules import (
     PointModule,
     PointSequential,
 )
+from litept.models.utils import offset2bincount
 from litept.models.utils.structure import Point
-from timm.layers import DropPath
 
 
 class PointROPEAttention(PointModule):
@@ -147,17 +148,24 @@ class Block(PointModule):
         enable_conv=True,
         enable_attn=True,
         rope_freq=100.0,
+        export_mode=False,
     ):
         super().__init__()
         self.channels = channels
         self.pre_norm = pre_norm
+        self.export_mode = export_mode
 
         self.enable_conv = enable_conv
         self.enable_attn = enable_attn
 
         if self.enable_conv:
+            if export_mode:
+                from SparseConvolution.sparse_conv import SubMConv3d
+            else:
+                from spconv.pytorch import SubMConv3d
+
             self.conv = PointSequential(
-                spconv.SubMConv3d(
+                SubMConv3d(
                     channels,
                     channels,
                     kernel_size=3,
@@ -258,12 +266,14 @@ class LitePT(PointModule):
         pre_norm=True,
         shuffle_orders=True,
         enc_mode=False,
+        export_mode=False,
     ):
         super().__init__()
         self.num_stages = len(enc_depths)
         self.order = [order] if isinstance(order, str) else order
         self.enc_mode = enc_mode
         self.shuffle_orders = shuffle_orders
+        self.export_mode = export_mode
 
         self.enc_conv = enc_conv
         self.enc_attn = enc_attn
@@ -292,6 +302,7 @@ class LitePT(PointModule):
             embed_channels=enc_channels[0],
             norm_layer=bn_layer,
             act_layer=act_layer,
+            export_mode=self.export_mode,
         )
 
         # encoder
@@ -314,6 +325,7 @@ class LitePT(PointModule):
                         act_layer=act_layer,
                         re_serialization=enc_attn[s],
                         serialization_order=self.order,
+                        export_mode=self.export_mode,
                     ),
                     name="down",
                 )
@@ -337,6 +349,7 @@ class LitePT(PointModule):
                         enable_conv=enc_conv[s],
                         enable_attn=enc_attn[s],
                         rope_freq=enc_rope_freq[s],
+                        export_mode=self.export_mode,
                     ),
                     name=f"block{i}",
                 )
@@ -386,6 +399,7 @@ class LitePT(PointModule):
                             enable_conv=dec_conv[s],
                             enable_attn=dec_attn[s],
                             rope_freq=dec_rope_freq[s],
+                            export_mode=self.export_mode,
                         ),
                         name=f"block{i}",
                     )
@@ -405,6 +419,25 @@ class LitePT(PointModule):
         point = Point(data_dict)
         if self.enc_attn[0]:
             point.serialization(order=self.order, shuffle_orders=self.shuffle_orders)
+        point.sparsify()
+
+        point = self.embedding(point)
+        point = self.enc(point)
+
+        if not self.enc_mode:
+            point = self.dec(point)
+
+        return point
+
+    def export_forward(self, data_dict):
+        point = Point(data_dict)
+        if self.enc_attn[0]:
+            point["serialized_depth"] = data_dict["serialized_depth"]
+            point["serialized_depth"] = data_dict["serialized_depth"]
+            point["serialized_code"] = data_dict["serialized_code"]
+            point["serialized_order"] = data_dict["serialized_order"]
+            point["serialized_inverse"] = data_dict["serialized_inverse"]
+            point["sparse_shape"] = data_dict["sparse_shape"]
         point.sparsify()
 
         point = self.embedding(point)

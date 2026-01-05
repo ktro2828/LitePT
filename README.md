@@ -119,6 +119,17 @@ sh scripts/train.sh -g 4 -d scannet -c insseg-litept-small-v1m2 -n insseg-litept
 sh scripts/train.sh -g 4 -d scannet200 -c insseg-litept-small-v1m2 -n insseg-litept-small-v1m2
 ```
 
+## Deployment
+
+### Semantic segmentation
+
+```shell
+### NuScenes + LitePT-S
+python -m tools.torch2onnx --config-file ./configs/nuscenes/semseg-litept-small-v1m1.py --num-gpus 1 \
+  --options \
+  weight=<path/to/nuscenes/model_best.pth>
+```
+
 ## Checklist
 
 - [x] Release models, code for semantic segmentation and instance segmentation.

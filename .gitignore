@@ -148,3 +148,5 @@ cython_debug/
 # Data & Experiment results
 data
 exp
+workdir
+*.pth

@@ -8,6 +8,7 @@ import torch_scatter
 from addict import Dict
 
 from litept.engines.hooks import HookBase
+from litept.models.scatter import argsort, segment_csr, unique
 from litept.models.utils.structure import Point
 
 
@@ -111,6 +112,7 @@ class GridPooling(PointModule):
         traceable=True,  # record parent and cluster
         re_serialization=False,
         serialization_order="z",
+        export_mode=False,
     ):
         super().__init__()
         self.in_channels = in_channels
@@ -130,6 +132,7 @@ class GridPooling(PointModule):
 
         self.re_serialization = re_serialization
         self.serialization_order = serialization_order
+        self.export_mode = export_mode
 
     def forward(self, point: Point):
         if "grid_coord" in point.keys():
@@ -146,34 +149,59 @@ class GridPooling(PointModule):
             )
         grid_coord = torch.div(grid_coord, self.stride, rounding_mode="trunc")
         grid_coord = grid_coord | point.batch.view(-1, 1) << 48
-        grid_coord, cluster, counts = torch.unique(
-            grid_coord,
-            sorted=True,
-            return_inverse=True,
-            return_counts=True,
-            dim=0,
-        )
-        grid_coord = grid_coord & ((1 << 48) - 1)
-        # indices of point sorted by cluster, for torch_scatter.segment_csr
-        _, indices = torch.sort(cluster)
+
+        if not self.export_mode:
+            grid_coord, cluster, counts = torch.unique(
+                grid_coord,
+                sorted=True,
+                return_inverse=True,
+                return_counts=True,
+                dim=0,
+            )
+            grid_coord = grid_coord & ((1 << 48) - 1)
+            # indices of point sorted by cluster, for torch_scatter.segment_csr
+            _, indices = torch.sort(cluster)
+        else:
+            grid_coord, cluster, counts = unique(grid_coord)
+            grid_coord = grid_coord & ((1 << 48) - 1)
+            # indices of point sorted by cluster, for torch_scatter.segment_csr
+            indices = argsort(cluster)
+
         # index pointer for sorted point, for torch_scatter.segment_csr
         idx_ptr = torch.cat([counts.new_zeros(1), torch.cumsum(counts, dim=0)])
         # head_indices of each cluster, for reduce attr e.g. code, batch
         head_indices = indices[idx_ptr[:-1]]
-        point_dict = Dict(
-            feat=torch_scatter.segment_csr(
-                self.proj(point.feat)[indices], idx_ptr, reduce=self.reduce
-            ),
-            coord=torch_scatter.segment_csr(
-                point.coord[indices], idx_ptr, reduce="mean"
-            ),
-            grid_coord=grid_coord,
-            batch=point.batch[head_indices],
-        )
-        if "origin_coord" in point.keys():
-            point_dict["origin_coord"] = torch_scatter.segment_csr(
-                point.origin_coord[indices], idx_ptr, reduce="mean"
+
+        if not self.export_mode:
+            point_dict = Dict(
+                feat=torch_scatter.segment_csr(
+                    self.proj(point.feat)[indices], idx_ptr, reduce=self.reduce
+                ),
+                coord=torch_scatter.segment_csr(
+                    point.coord[indices], idx_ptr, reduce="mean"
+                ),
+                grid_coord=grid_coord,
+                batch=point.batch[head_indices],
             )
+        else:
+            point_dict = Dict(
+                feat=segment_csr(
+                    self.proj(point.feat)[indices], idx_ptr, reduce=self.reduce
+                ),
+                coord=segment_csr(point.coord[indices], idx_ptr, reduce="mean"),
+                grid_coord=grid_coord,
+                batch=point.batch[head_indices],
+            )
+
+        if "origin_coord" in point.keys():
+            if not self.export_mode:
+                point_dict["origin_coord"] = torch_scatter.segment_csr(
+                    point.origin_coord[indices], idx_ptr, reduce="mean"
+                )
+            else:
+                point_dict["origin_coord"] = segment_csr(
+                    point.origin_coord[indices], idx_ptr, reduce="mean"
+                )
         if "condition" in point.keys():
             point_dict["condition"] = point.condition
         if "context" in point.keys():
@@ -183,18 +211,29 @@ class GridPooling(PointModule):
         if "split" in point.keys():
             point_dict["split"] = point.split
         if "color" in point.keys():
-            point_dict["color"] = torch_scatter.segment_csr(
-                point.color[indices], idx_ptr, reduce="mean"
-            )
+            if not self.export_mode:
+                point_dict["color"] = torch_scatter.segment_csr(
+                    point.color[indices], idx_ptr, reduce="mean"
+                )
+            else:
+                point_dict["color"] = segment_csr(
+                    point.color[indices], idx_ptr, reduce="mean"
+                )
         if "grid_size" in point.keys():
             point_dict["grid_size"] = point.grid_size * self.stride
         if "mask" in point.keys():
-            point_dict["mask"] = (
-                torch_scatter.segment_csr(
-                    point.mask[indices].float(), idx_ptr, reduce="mean"
+            if not self.export_mode:
+                point_dict["mask"] = (
+                    torch_scatter.segment_csr(
+                        point.mask[indices].float(), idx_ptr, reduce="mean"
+                    )
+                    > 0.5
                 )
-                > 0.5
-            )
+            else:
+                point_dict["mask"] = (
+                    segment_csr(point.mask[indices].float(), idx_ptr, reduce="mean")
+                    > 0.5
+                )
 
         if self.traceable:
             point_dict["pooling_inverse"] = cluster
@@ -262,14 +301,19 @@ class Embedding(PointModule):
         embed_channels,
         norm_layer=None,
         act_layer=None,
+        export_mode=False,
     ):
         super().__init__()
         self.in_channels = in_channels
         self.embed_channels = embed_channels
 
-        # TODO: check remove spconv
+        if export_mode:
+            from SparseConvolution.sparse_conv import SubMConv3d
+        else:
+            from spconv.pytorch import SubMConv3d
+
         self.stem = PointSequential(
-            conv=spconv.SubMConv3d(
+            conv=SubMConv3d(
                 in_channels,
                 embed_channels,
                 kernel_size=5,

@@ -49,7 +49,7 @@ class Point(Dict):
     def serialization(
         self,
         order: str = "z",
-        depth: int | None = None,
+        depth: torch.Tensor | None = None,
         shuffle_orders: bool = False,
     ) -> None:
         """
@@ -72,10 +72,12 @@ class Point(Dict):
 
         if depth is None:
             # Adaptive measure the depth of serialization cube (length = 2 ^ depth)
-            depth = int(self.grid_coord.max() + 1).bit_length()
+            # depth = int(self.grid_coord.max()).bit_length()
+            depth = bit_length_tensor(self.grid_coord.max())
+
         self["serialized_depth"] = depth
         # Maximum bit length for serialization code is 63 (int64)
-        assert depth * 3 + len(self.offset).bit_length() <= 63
+        assert torch.all(depth * 3 + bit_length_tensor(self.offset) <= 63)
         # Here we follow OCNN and set the depth limitation to 16 (48bit) for the point position.
         # Although depth is limited to less than 16, we can encode a 655.36^3 (2^16 * 0.01) meter^3
         # cube with a grid size of 0.01 meter. We consider it is enough for the current stage.
@@ -150,7 +152,9 @@ class Point(Dict):
 
     @torch.no_grad()
     def get_padding_and_inverse(
-        self, patch_size
+        self,
+        patch_size,
+        export_mode: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         pad_key = "pad"
         unpad_key = "unpad"
@@ -173,36 +177,78 @@ class Point(Dict):
             # only pad point when num of points larger than patch_size
             mask_pad = bincount > patch_size
             bincount_pad = ~mask_pad * bincount + mask_pad * bincount_pad
-            _offset = nn.functional.pad(offset, (1, 0))
-            _offset_pad = nn.functional.pad(torch.cumsum(bincount_pad, dim=0), (1, 0))
-            pad = torch.arange(_offset_pad[-1], device=offset.device)
-            unpad = torch.arange(_offset[-1], device=offset.device)
-            cu_seqlens = []
-            for i in range(len(offset)):
-                unpad[_offset[i] : _offset[i + 1]] += _offset_pad[i] - _offset[i]
-                if bincount[i] != bincount_pad[i]:
-                    pad[
-                        _offset_pad[i + 1]
-                        - patch_size
-                        + (bincount[i] % patch_size) : _offset_pad[i + 1]
-                    ] = pad[
-                        _offset_pad[i + 1]
-                        - 2 * patch_size
-                        + (bincount[i] % patch_size) : _offset_pad[i + 1] - patch_size
-                    ]
-                pad[_offset_pad[i] : _offset_pad[i + 1]] -= _offset_pad[i] - _offset[i]
+
+            if not export_mode:
+                _offset = nn.functional.pad(offset, (1, 0))
+                _offset_pad = nn.functional.pad(
+                    torch.cumsum(bincount_pad, dim=0), (1, 0)
+                )
+                pad = torch.arange(_offset_pad[-1], device=offset.device)
+                unpad = torch.arange(_offset[-1], device=offset.device)
+                cu_seqlens = []
+                for i in range(len(offset)):
+                    unpad[_offset[i] : _offset[i + 1]] += _offset_pad[i] - _offset[i]
+                    if bincount[i] != bincount_pad[i]:
+                        pad[
+                            _offset_pad[i + 1]
+                            - patch_size
+                            + (bincount[i] % patch_size) : _offset_pad[i + 1]
+                        ] = pad[
+                            _offset_pad[i + 1]
+                            - 2 * patch_size
+                            + (bincount[i] % patch_size) : _offset_pad[i + 1]
+                            - patch_size
+                        ]
+                    pad[_offset_pad[i] : _offset_pad[i + 1]] -= (
+                        _offset_pad[i] - _offset[i]
+                    )
+                    cu_seqlens.append(
+                        torch.arange(
+                            _offset_pad[i],
+                            _offset_pad[i + 1],
+                            step=patch_size,
+                            dtype=torch.int32,
+                            device=offset.device,
+                        )
+                    )
+                self[pad_key] = pad
+                self[unpad_key] = unpad
+                self[cu_seqlens_key] = nn.functional.pad(
+                    torch.concat(cu_seqlens), (0, 1), value=_offset_pad[-1]
+                )
+            else:
+                # NOTE: needed due to tensorrt reasons
+                assert len(offset) == 1
+
+                pad = torch.arange(bincount_pad[0], device=offset.device)
+                unpad = torch.arange(offset[0], device=offset.device)
+                cu_seqlens = []
+
+                pad[
+                    bincount_pad[0]
+                    - self.patch_size
+                    + (bincount[0] % self.patch_size) : bincount_pad[0]
+                ] = pad[
+                    bincount_pad[0]
+                    - 2 * self.patch_size
+                    + (bincount[0] % self.patch_size) : bincount_pad[0]
+                    - self.patch_size
+                ]
+
                 cu_seqlens.append(
                     torch.arange(
-                        _offset_pad[i],
-                        _offset_pad[i + 1],
-                        step=patch_size,
+                        0,
+                        bincount_pad[0],
+                        step=self.patch_size,
                         dtype=torch.int32,
                         device=offset.device,
                     )
                 )
-            self[pad_key] = pad
-            self[unpad_key] = unpad
-            self[cu_seqlens_key] = nn.functional.pad(
-                torch.concat(cu_seqlens), (0, 1), value=_offset_pad[-1]
-            )
+
+                self[pad_key] = pad
+                self[unpad_key] = unpad
+                self[cu_seqlens_key] = nn.functional.pad(
+                    torch.concat(cu_seqlens), (0, 1), value=bincount_pad[0]
+                )
+
         return self[pad_key], self[unpad_key], self[cu_seqlens_key]

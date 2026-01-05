@@ -13,7 +13,7 @@ class PointROPE_func(Function):
     @staticmethod
     def symbolic(g, tokens, positions, base, F0=1.0):
         return g.op(
-            "litept::PointROPE",
+            "litept::PointRoPE",
             tokens,
             positions,
             base_f=float(base),
