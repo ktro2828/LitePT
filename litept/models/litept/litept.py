@@ -4,9 +4,6 @@ import flash_attn
 import spconv.pytorch as spconv
 import torch
 import torch.nn as nn
-from timm.layers import DropPath
-
-# from pointrope import PointROPE
 from libs.pointrope import PointROPE
 from litept.models.builder import MODELS
 from litept.models.modules import (
@@ -17,6 +14,7 @@ from litept.models.modules import (
     PointSequential,
 )
 from litept.models.utils.structure import Point
+from timm.layers import DropPath
 
 
 class PointROPEAttention(PointModule):

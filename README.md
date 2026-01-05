@@ -33,26 +33,17 @@ University of Zurich
 ### Environment
 
 - Create an environment and install pytorch and other required packages:
+
   ```shell
   git clone https://github.com/prs-eth/LitePT.git
   cd LitePT
   uv sync
   ```
-- PointROPE. Modify the `all_cuda_archs` in `libs/pointrope/setup.py` to your GPU arch, e.g. 8.6: GeForce RTX 3090; 9.0: NVIDIA H100; more info: https://developer.nvidia.com/cuda/gpus
 
-  ```shell
-  cd libs/pointrope
-  python setup.py install
-  cd ../..
-  ```
-
-- Additional requirements. The requirements below are optional, and only required for evaluator and PointGroup instance segmentation.
-  - For PointGroup:
-    ```
-    conda install -c bioconda google-sparsehash
-    cd libs/pointgroup_ops
-    python setup.py install
-    cd ../..
+- Additional requirements.
+  - For **instance segmentation**:
+    ```shell
+    uv sync --extra instance
     ```
 
 ### Use LitePT in Your Own Project

@@ -20,10 +20,10 @@ setup(
     name="pointrope",
     ext_modules=[
         CUDAExtension(
-            name="pointrope",
+            name="pointrope_cuda",
             sources=[
-                "pointrope.cpp",
-                "kernels.cu",
+                "src/pointrope.cpp",
+                "src/kernels.cu",
             ],
             extra_compile_args=dict(
                 nvcc=["-O3", "--ptxas-options=-v", "--use_fast_math"] + all_cuda_archs,

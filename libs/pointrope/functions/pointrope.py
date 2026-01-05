@@ -1,9 +1,11 @@
 import torch
 
 try:
-    import pointrope as _kernels  # run `python setup.py install`
+    import pointrope_cuda as _kernels  # run `python setup.py install`
 except ModuleNotFoundError:
-    from . import pointrope as _kernels  # run `python setup.py build_ext --inplace`
+    from . import (
+        pointrope_cuda as _kernels,  # run `python setup.py build_ext --inplace`
+    )
 
 
 class PointROPE_func(torch.autograd.Function):
