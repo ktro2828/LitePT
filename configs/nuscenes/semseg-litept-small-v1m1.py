@@ -9,6 +9,10 @@ enable_amp = True
 
 save_path = "exp/nuscenes/semseg-litept-small-v1m1"
 
+# (min_x, min_y, min_z, max_x, max_y, max_z)
+point_cloud_range = [-76.8, -76.8, -4, 76.8, 76.8, 8]
+grid_size = 0.1  # original is 0.05
+
 # model settings
 model = dict(
     type="DefaultSegmentorV2",
