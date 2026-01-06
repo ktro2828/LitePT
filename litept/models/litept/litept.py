@@ -3,8 +3,7 @@ from functools import partial
 import flash_attn
 import torch
 import torch.nn as nn
-from timm.layers import DropPath
-
+import torch.nn.functional as F
 from libs.pointrope import PointROPE
 from litept.models.builder import MODELS
 from litept.models.modules import (
@@ -15,6 +14,7 @@ from litept.models.modules import (
     PointSequential,
 )
 from litept.models.utils.structure import Point
+from timm.layers import DropPath
 
 
 class PointROPEAttention(PointModule):
@@ -29,6 +29,7 @@ class PointROPEAttention(PointModule):
         attn_drop=0.0,
         proj_drop=0.0,
         order_index=0,
+        export_mode=False,
     ):
         super().__init__()
         assert channels % num_heads == 0
@@ -43,7 +44,6 @@ class PointROPEAttention(PointModule):
         self.qkv = torch.nn.Linear(channels, channels * 3, bias=qkv_bias)
         self.proj = torch.nn.Linear(channels, channels)
         self.proj_drop = torch.nn.Dropout(proj_drop)
-        # self.softmax = torch.nn.Softmax(dim=-1)  # unused
 
         # pointrope
         self.rope = PointROPE(freq=rope_freq)
@@ -83,13 +83,26 @@ class PointROPEAttention(PointModule):
             dim=1,
         )  # [N, 3, H, head_dim]
 
-        feat = flash_attn.flash_attn_varlen_qkvpacked_func(
-            qkv_rotated,
-            cu_seqlens,
-            max_seqlen=self.patch_size,
-            dropout_p=self.attn_drop if self.training else 0,
-            softmax_scale=self.scale,
-        ).reshape(-1, C)
+        if torch.onnx.is_in_onnx_export():
+            assert (qkv_rotated.shape[0] % K) == 0
+            # encode and reshape qkv: (N', K, 3, H, C') => (3, N', H, K, C')
+            q, k, v = (
+                qkv_rotated.reshape(-1, K, 3, H, C // H)
+                .permute(2, 0, 3, 1, 4)
+                .unbind(dim=0)
+            )
+            # attn
+            attn = (q * self.scale) @ k.transpose(-2, -1)  # (N', H, K, K)
+            attn = F.softmax(attn, dim=-1)
+            feat = (attn @ v).transpose(1, 2).reshape(-1, C)
+        else:
+            feat = flash_attn.flash_attn_varlen_qkvpacked_func(
+                qkv_rotated,
+                cu_seqlens,
+                max_seqlen=self.patch_size,
+                dropout_p=self.attn_drop if self.training else 0,
+                softmax_scale=self.scale,
+            ).reshape(-1, C)
 
         feat = feat.to(qkv.dtype)
         feat = feat[inverse]
