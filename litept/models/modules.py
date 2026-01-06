@@ -147,7 +147,15 @@ class GridPooling(PointModule):
                 "[gird_coord] or [coord, grid_size] should be include in the Point"
             )
         grid_coord = torch.div(grid_coord, self.stride, rounding_mode="trunc")
-        grid_coord = grid_coord | point.batch.view(-1, 1) << 48
+        # Pack batch id into high bits for clustering.
+        # NOTE: ONNX export does not support bitwise OR on non-boolean tensors.
+        # Use arithmetic packing in export_mode, bitwise packing otherwise.
+        if self.export_mode:
+            grid_coord = grid_coord + (
+                point.batch.view(-1, 1).to(grid_coord.dtype) * (1 << 48)
+            )
+        else:
+            grid_coord = grid_coord | (point.batch.view(-1, 1) << 48)
 
         grid_coord, cluster, counts = torch.unique(
             grid_coord,
@@ -156,7 +164,11 @@ class GridPooling(PointModule):
             return_counts=True,
             dim=0,
         )
-        grid_coord = grid_coord & ((1 << 48) - 1)
+        # Unpack: keep only low 48-bit part (remove batch component).
+        if self.export_mode:
+            grid_coord = torch.remainder(grid_coord, (1 << 48))
+        else:
+            grid_coord = grid_coord & ((1 << 48) - 1)
         # indices of point sorted by cluster, for torch_scatter.segment_csr
         _, indices = torch.sort(cluster)
 

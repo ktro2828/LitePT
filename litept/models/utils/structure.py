@@ -1,10 +1,9 @@
 import spconv.pytorch as spconv
 import torch
 from addict import Dict
-from torch import nn
-
 from litept.models.utils import batch2offset, offset2batch, offset2bincount
 from litept.models.utils.serialization import decode, encode
+from torch import nn
 
 
 def bit_length_tensor(x: torch.Tensor) -> torch.Tensor:
@@ -103,10 +102,17 @@ class Point(Dict):
         )
 
         if shuffle_orders:
-            perm = torch.randperm(code.shape[0])
-            code = code[perm]
-            order = order[perm]
-            inverse = inverse[perm]
+            # ONNX export does not support `aten::randperm`.
+            # Serialization order shuffling is only a training-time augmentation, so disable it for export.
+            if torch.onnx.is_in_onnx_export():
+                perm = None
+            else:
+                perm = torch.randperm(code.shape[0])
+
+            if perm is not None:
+                code = code[perm]
+                order = order[perm]
+                inverse = inverse[perm]
 
         self["serialized_code"] = code
         self["serialized_order"] = order
