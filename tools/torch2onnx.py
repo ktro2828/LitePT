@@ -150,7 +150,7 @@ def main():
         keep_initializers_as_inputs = False
         opset_version = 17
         input_names = ["grid_coord", "feat", "serialized_depth", "serialized_code"]
-        output_names = ["pred_label", "pred_prob"]
+        output_names = ["pred_label", "pred_score"]
         dynamic_axes = {
             "grid_coord": {
                 0: "voxels_num",
