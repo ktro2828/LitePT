@@ -14,7 +14,6 @@ from litept.models.modules import (
     PointModule,
     PointSequential,
 )
-from litept.models.utils import offset2bincount
 from litept.models.utils.structure import Point
 
 
@@ -44,7 +43,7 @@ class PointROPEAttention(PointModule):
         self.qkv = torch.nn.Linear(channels, channels * 3, bias=qkv_bias)
         self.proj = torch.nn.Linear(channels, channels)
         self.proj_drop = torch.nn.Dropout(proj_drop)
-        self.softmax = torch.nn.Softmax(dim=-1)
+        # self.softmax = torch.nn.Softmax(dim=-1)  # unused
 
         # pointrope
         self.rope = PointROPE(freq=rope_freq)

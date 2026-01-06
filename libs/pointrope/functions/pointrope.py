@@ -18,6 +18,7 @@ class PointROPE_func(Function):
             positions,
             base_f=float(base),
             f0_f=float(F0),
+            outputs=1,
         )
 
     @staticmethod

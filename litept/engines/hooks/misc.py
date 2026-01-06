@@ -13,7 +13,6 @@ from collections import OrderedDict
 import torch
 
 import litept.utils.comm as comm
-from litept.engines.test import TESTERS
 from litept.utils.comm import is_main_process
 from litept.utils.timer import Timer
 
@@ -250,6 +249,8 @@ class PreciseEvaluator(HookBase):
         self.test_last = test_last
 
     def after_train(self):
+        from litept.engines.test import TESTERS
+
         self.trainer.logger.info(
             ">>>>>>>>>>>>>>>> Start Precise Evaluation >>>>>>>>>>>>>>>>"
         )

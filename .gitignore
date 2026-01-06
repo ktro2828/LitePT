@@ -150,3 +150,5 @@ data
 exp
 workdir
 *.pth
+*.npz
+*.onnx

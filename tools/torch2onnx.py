@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 import numpy as np
+import SparseConvolution  # noqa do not remove this line, it is required for onnx export
 import torch
 import torch.nn.functional as F
-from torch import nn
-
-import SparseConvolution  # noqa do not remove this line, it is required for onnx export
 from litept.engines.defaults import (
     default_argument_parser,
     default_config_parser,
@@ -14,6 +12,7 @@ from litept.engines.defaults import (
 from litept.engines.train import TRAINERS
 from litept.models.scatter import argsort
 from litept.models.utils.structure import Point, bit_length_tensor
+from torch import nn
 
 
 class LitePTONNX(nn.Module):
@@ -133,9 +132,11 @@ def main():
 
         input_dict["serialized_depth"] = point["serialized_depth"]
         input_dict["serialized_code"] = point["serialized_code"]
-        input_dict.pop("segment")
-        input_dict.pop("offset")
         input_dict.pop("coord")
+        input_dict.pop("segment")
+        input_dict.pop("origin_segment")
+        input_dict.pop("inverse")
+        input_dict.pop("offset")
 
         pred_labels, pred_probs = model(**input_dict)
 
@@ -163,7 +164,12 @@ def main():
         }
         torch.onnx.export(
             model,
-            input_dict,
+            (
+                input_dict["grid_coord"],
+                input_dict["feat"],
+                input_dict["serialized_depth"],
+                input_dict["serialized_code"],
+            ),
             "litept.onnx",
             export_params=export_params,
             input_names=input_names,

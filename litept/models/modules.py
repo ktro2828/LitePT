@@ -6,9 +6,8 @@ import torch
 import torch.nn as nn
 import torch_scatter
 from addict import Dict
-
 from litept.engines.hooks import HookBase
-from litept.models.scatter import argsort, segment_csr, unique
+from litept.models.scatter import segment_csr
 from litept.models.utils.structure import Point
 
 
@@ -150,22 +149,16 @@ class GridPooling(PointModule):
         grid_coord = torch.div(grid_coord, self.stride, rounding_mode="trunc")
         grid_coord = grid_coord | point.batch.view(-1, 1) << 48
 
-        if not self.export_mode:
-            grid_coord, cluster, counts = torch.unique(
-                grid_coord,
-                sorted=True,
-                return_inverse=True,
-                return_counts=True,
-                dim=0,
-            )
-            grid_coord = grid_coord & ((1 << 48) - 1)
-            # indices of point sorted by cluster, for torch_scatter.segment_csr
-            _, indices = torch.sort(cluster)
-        else:
-            grid_coord, cluster, counts = unique(grid_coord)
-            grid_coord = grid_coord & ((1 << 48) - 1)
-            # indices of point sorted by cluster, for torch_scatter.segment_csr
-            indices = argsort(cluster)
+        grid_coord, cluster, counts = torch.unique(
+            grid_coord,
+            sorted=True,
+            return_inverse=True,
+            return_counts=True,
+            dim=0,
+        )
+        grid_coord = grid_coord & ((1 << 48) - 1)
+        # indices of point sorted by cluster, for torch_scatter.segment_csr
+        _, indices = torch.sort(cluster)
 
         # index pointer for sorted point, for torch_scatter.segment_csr
         idx_ptr = torch.cat([counts.new_zeros(1), torch.cumsum(counts, dim=0)])
@@ -173,25 +166,24 @@ class GridPooling(PointModule):
         head_indices = indices[idx_ptr[:-1]]
 
         if not self.export_mode:
-            point_dict = Dict(
-                feat=torch_scatter.segment_csr(
-                    self.proj(point.feat)[indices], idx_ptr, reduce=self.reduce
-                ),
-                coord=torch_scatter.segment_csr(
-                    point.coord[indices], idx_ptr, reduce="mean"
-                ),
-                grid_coord=grid_coord,
-                batch=point.batch[head_indices],
+            scatter_feat = torch_scatter.segment_csr(
+                self.proj(point.feat)[indices], idx_ptr, reduce=self.reduce
+            )
+            scatter_coord = torch_scatter.segment_csr(
+                point.coord[indices], idx_ptr, reduce="mean"
             )
         else:
-            point_dict = Dict(
-                feat=segment_csr(
-                    self.proj(point.feat)[indices], idx_ptr, reduce=self.reduce
-                ),
-                coord=segment_csr(point.coord[indices], idx_ptr, reduce="mean"),
-                grid_coord=grid_coord,
-                batch=point.batch[head_indices],
+            scatter_feat = segment_csr(
+                self.proj(point.feat)[indices], idx_ptr, self.reduce
             )
+            scatter_coord = segment_csr(point.coord[indices], idx_ptr, "mean")
+
+        point_dict = Dict(
+            feat=scatter_feat,
+            coord=scatter_coord,
+            grid_coord=grid_coord,
+            batch=point.batch[head_indices],
+        )
 
         if "origin_coord" in point.keys():
             if not self.export_mode:
@@ -200,7 +192,7 @@ class GridPooling(PointModule):
                 )
             else:
                 point_dict["origin_coord"] = segment_csr(
-                    point.origin_coord[indices], idx_ptr, reduce="mean"
+                    point.origin_coord[indices], idx_ptr, "mean"
                 )
         if "condition" in point.keys():
             point_dict["condition"] = point.condition
@@ -216,9 +208,7 @@ class GridPooling(PointModule):
                     point.color[indices], idx_ptr, reduce="mean"
                 )
             else:
-                point_dict["color"] = segment_csr(
-                    point.color[indices], idx_ptr, reduce="mean"
-                )
+                point_dict["color"] = segment_csr(point.color[indices], idx_ptr, "mean")
         if "grid_size" in point.keys():
             point_dict["grid_size"] = point.grid_size * self.stride
         if "mask" in point.keys():
@@ -231,8 +221,7 @@ class GridPooling(PointModule):
                 )
             else:
                 point_dict["mask"] = (
-                    segment_csr(point.mask[indices].float(), idx_ptr, reduce="mean")
-                    > 0.5
+                    segment_csr(point.mask[indices].float(), idx_ptr, "mean") > 0.5
                 )
 
         if self.traceable:
