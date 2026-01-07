@@ -7,7 +7,7 @@ import torch.nn as nn
 import torch_scatter
 from addict import Dict
 from litept.engines.hooks import HookBase
-from litept.models.scatter import segment_csr
+from litept.models.scatter import argsort, segment_csr, unique
 from litept.models.utils.structure import Point
 
 
@@ -151,26 +151,52 @@ class GridPooling(PointModule):
         # NOTE: ONNX export does not support bitwise OR on non-boolean tensors.
         # Use arithmetic packing in export_mode, bitwise packing otherwise.
         if self.export_mode:
-            grid_coord = grid_coord + (
-                point.batch.view(-1, 1).to(grid_coord.dtype) * (1 << 48)
+            # IMPORTANT:
+            # Our export-friendly `unique()` / `argsort()` wrappers operate on 1D tensors.
+            # `grid_coord` here is (N, 3). We must pack it into a single 1D key per point,
+            # otherwise the semantics of `inverse_indices` / `counts` don't match the CSR
+            # construction below and can lead to out-of-bounds indexing on GPU.
+            #
+            # Key layout (all arithmetic; avoids bitwise ops for ONNX friendliness):
+            #   key = x + (y << 16) + (z << 32) + (batch << 48)
+            # This assumes x,y,z are in [0, 2^16).
+            grid_coord_i = grid_coord.to(torch.int64)
+            x = grid_coord_i[:, 0]
+            y = grid_coord_i[:, 1]
+            z = grid_coord_i[:, 2]
+            b = point.batch.to(torch.int64)
+
+            packed = x + y * (1 << 16) + z * (1 << 32) + b * (1 << 48)
+
+            unique_keys, inverse_indices, counts, _ = unique(packed)
+
+            # Sort points by cluster id (inverse_indices) to make them contiguous per cluster.
+            indices = argsort(inverse_indices)
+            cluster = inverse_indices
+
+            # Unpack to (M, 3) grid coords (drop batch component).
+            key_wo_batch = torch.remainder(unique_keys, (1 << 48))
+            gx = torch.remainder(key_wo_batch, (1 << 16))
+            gy = torch.remainder(
+                torch.div(key_wo_batch, (1 << 16), rounding_mode="trunc"), (1 << 16)
             )
+            gz = torch.remainder(
+                torch.div(key_wo_batch, (1 << 32), rounding_mode="trunc"), (1 << 16)
+            )
+            grid_coord = torch.stack([gx, gy, gz], dim=1).to(grid_coord.dtype)
         else:
             grid_coord = grid_coord | (point.batch.view(-1, 1) << 48)
-
-        grid_coord, cluster, counts = torch.unique(
-            grid_coord,
-            sorted=True,
-            return_inverse=True,
-            return_counts=True,
-            dim=0,
-        )
-        # Unpack: keep only low 48-bit part (remove batch component).
-        if self.export_mode:
-            grid_coord = torch.remainder(grid_coord, (1 << 48))
-        else:
-            grid_coord = grid_coord & ((1 << 48) - 1)
-        # indices of point sorted by cluster, for torch_scatter.segment_csr
-        _, indices = torch.sort(cluster)
+            _, cluster, counts = torch.unique(
+                grid_coord,
+                sorted=True,
+                return_inverse=True,
+                return_counts=True,
+                dim=0,
+            )
+            # Unpack: keep only low 48-bit part (remove batch component).
+            # grid_coord = grid_coord & ((1 << 48) - 1)
+            # indices of point sorted by cluster, for torch_scatter.segment_csr
+            _, indices = torch.sort(cluster)
 
         # index pointer for sorted point, for torch_scatter.segment_csr
         idx_ptr = torch.cat([counts.new_zeros(1), torch.cumsum(counts, dim=0)])
