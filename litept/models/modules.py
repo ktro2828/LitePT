@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 import torch_scatter
 from addict import Dict
+
 from litept.engines.hooks import HookBase
 from litept.models.scatter import argsort, segment_csr, unique
 from litept.models.utils.structure import Point
@@ -78,9 +79,7 @@ class PointSequential(PointModule):
                 if isinstance(input, Point):
                     input.feat = module(input.feat)
                     if "sparse_conv_feat" in input.keys():
-                        input.sparse_conv_feat = input.sparse_conv_feat.replace_feature(
-                            input.feat
-                        )
+                        input.sparse_conv_feat = input.sparse_conv_feat.replace_feature(input.feat)
                 elif isinstance(input, spconv.SparseConvTensor):
                     if input.indices.shape[0] != 0:
                         input = input.replace_feature(module(input.features))
@@ -186,7 +185,7 @@ class GridPooling(PointModule):
             grid_coord = torch.stack([gx, gy, gz], dim=1).to(grid_coord.dtype)
         else:
             grid_coord = grid_coord | (point.batch.view(-1, 1) << 48)
-            _, cluster, counts = torch.unique(
+            grid_coord, cluster, counts = torch.unique(
                 grid_coord,
                 sorted=True,
                 return_inverse=True,
@@ -194,7 +193,7 @@ class GridPooling(PointModule):
                 dim=0,
             )
             # Unpack: keep only low 48-bit part (remove batch component).
-            # grid_coord = grid_coord & ((1 << 48) - 1)
+            grid_coord = grid_coord & ((1 << 48) - 1)
             # indices of point sorted by cluster, for torch_scatter.segment_csr
             _, indices = torch.sort(cluster)
 
@@ -207,13 +206,9 @@ class GridPooling(PointModule):
             scatter_feat = torch_scatter.segment_csr(
                 self.proj(point.feat)[indices], idx_ptr, reduce=self.reduce
             )
-            scatter_coord = torch_scatter.segment_csr(
-                point.coord[indices], idx_ptr, reduce="mean"
-            )
+            scatter_coord = torch_scatter.segment_csr(point.coord[indices], idx_ptr, reduce="mean")
         else:
-            scatter_feat = segment_csr(
-                self.proj(point.feat)[indices], idx_ptr, self.reduce
-            )
+            scatter_feat = segment_csr(self.proj(point.feat)[indices], idx_ptr, self.reduce)
             scatter_coord = segment_csr(point.coord[indices], idx_ptr, "mean")
 
         point_dict = Dict(
@@ -252,15 +247,11 @@ class GridPooling(PointModule):
         if "mask" in point.keys():
             if not self.export_mode:
                 point_dict["mask"] = (
-                    torch_scatter.segment_csr(
-                        point.mask[indices].float(), idx_ptr, reduce="mean"
-                    )
+                    torch_scatter.segment_csr(point.mask[indices].float(), idx_ptr, reduce="mean")
                     > 0.5
                 )
             else:
-                point_dict["mask"] = (
-                    segment_csr(point.mask[indices].float(), idx_ptr, "mean") > 0.5
-                )
+                point_dict["mask"] = segment_csr(point.mask[indices].float(), idx_ptr, "mean") > 0.5
 
         if self.traceable:
             point_dict["pooling_inverse"] = cluster
@@ -272,9 +263,7 @@ class GridPooling(PointModule):
             point = self.act(point)
 
         if self.re_serialization:
-            point.serialization(
-                order=self.serialization_order, shuffle_orders=self.shuffle_orders
-            )
+            point.serialization(order=self.serialization_order, shuffle_orders=self.shuffle_orders)
         point.sparsify()
         return point
 
