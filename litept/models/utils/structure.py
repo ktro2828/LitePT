@@ -8,7 +8,7 @@ from torch import nn
 
 def bit_length_tensor(x: torch.Tensor) -> torch.Tensor:
     # Ensure x is a positive integer tensor
-    x = torch.clamp(x, min=1)
+    x = torch.clamp(x, min=1).float()
     return torch.floor(torch.log2(x)).to(torch.int64) + 1
 
 
