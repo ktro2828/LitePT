@@ -94,29 +94,24 @@ We prepare and organize the data in the same way with Pointcept [Data Preparatio
 
 ### Semantic segmentation
 
+If you want to resume training with your checkpoint, specify `weight=<path/to/your_checkpoint.pth>`:
+
 ```shell
 ### NuScenes + LitePT-S
-sh scripts/train.sh -g 4 -d nuscenes -c semseg-litept-small-v1m1 -n semseg-litept-small-v1m1
-### Waymo + LitePT-S
-sh scripts/train.sh -g 4 -d waymo -c semseg-litept-small-v1m1 -n semseg-litept-small-v1m1
-### ScanNet + LitePT-S
-sh scripts/train.sh -g 4 -d scannet -c semseg-litept-small-v1m1 -n semseg-litept-small-v1m1
-### Structured3D + LitePT-S
-sh scripts/train.sh -g 16 -d structured3d -c semseg-litept-small-v1m1 -n semseg-litept-small-v1m1
-### Structured3D + LitePT-B
-sh scripts/train.sh -g 16 -d structured3d -c semseg-litept-base-v1m1 -n semseg-litept-base-v1m1
-### Structured3D + LitePT-L
-sh scripts/train.sh -g 16 -d structured3d -c semseg-litept-large-v1m1 -n semseg-litept-large-v1m1
+python3 -m tools.train --config-file ./configs/nuscenes/semseg-litept-small-v1m1.py --num-gpus 4 \
+  --options \
+  weight=<path/to/nuscenes/model_best.pth>
 ```
 
-### Instance segmentation
+## Testing
+
+### Semantic segmentation
 
 ```shell
-### ScanNet + LitePT-S*
-sh scripts/train.sh -g 4 -d scannet -c insseg-litept-small-v1m2 -n insseg-litept-small-v1m2
-
-### ScanNet200 + LitePT-S*
-sh scripts/train.sh -g 4 -d scannet200 -c insseg-litept-small-v1m2 -n insseg-litept-small-v1m2
+### NuScenes + LitePT-S
+python -m tools.test --config-file ./configs/nuscenes/semseg-litept-small-v1m1.py --num-gpus 1 \
+  --options \
+  weight=<path/to/nuscenes/model_best.pth> show=True
 ```
 
 ## Deployment
