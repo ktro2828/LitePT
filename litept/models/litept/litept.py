@@ -4,6 +4,8 @@ import flash_attn
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from timm.layers import DropPath
+
 from libs.pointrope import PointROPE
 from litept.models.builder import MODELS
 from litept.models.modules import (
@@ -14,7 +16,6 @@ from litept.models.modules import (
     PointSequential,
 )
 from litept.models.utils.structure import Point
-from timm.layers import DropPath
 
 
 class PointROPEAttention(PointModule):
@@ -86,11 +87,7 @@ class PointROPEAttention(PointModule):
         if torch.onnx.is_in_onnx_export():
             assert (qkv_rotated.shape[0] % K) == 0
             # encode and reshape qkv: (N', K, 3, H, C') => (3, N', H, K, C')
-            q, k, v = (
-                qkv_rotated.reshape(-1, K, 3, H, C // H)
-                .permute(2, 0, 3, 1, 4)
-                .unbind(dim=0)
-            )
+            q, k, v = qkv_rotated.reshape(-1, K, 3, H, C // H).permute(2, 0, 3, 1, 4).unbind(dim=0)
             # attn
             attn = (q * self.scale) @ k.transpose(-2, -1)  # (N', H, K, K)
             attn = F.softmax(attn, dim=-1)
@@ -318,14 +315,10 @@ class LitePT(PointModule):
         )
 
         # encoder
-        enc_drop_path = [
-            x.item() for x in torch.linspace(0, drop_path, sum(enc_depths))
-        ]
+        enc_drop_path = [x.item() for x in torch.linspace(0, drop_path, sum(enc_depths))]
         self.enc = PointSequential()
         for s in range(self.num_stages):
-            enc_drop_path_ = enc_drop_path[
-                sum(enc_depths[:s]) : sum(enc_depths[: s + 1])
-            ]
+            enc_drop_path_ = enc_drop_path[sum(enc_depths[:s]) : sum(enc_depths[: s + 1])]
             enc = PointSequential()
             if s > 0:
                 enc.add(
@@ -370,15 +363,11 @@ class LitePT(PointModule):
 
         # decoder
         if not self.enc_mode:
-            dec_drop_path = [
-                x.item() for x in torch.linspace(0, drop_path, sum(dec_depths))
-            ]
+            dec_drop_path = [x.item() for x in torch.linspace(0, drop_path, sum(dec_depths))]
             self.dec = PointSequential()
             dec_channels = list(dec_channels) + [enc_channels[-1]]
             for s in reversed(range(self.num_stages - 1)):
-                dec_drop_path_ = dec_drop_path[
-                    sum(dec_depths[:s]) : sum(dec_depths[: s + 1])
-                ]
+                dec_drop_path_ = dec_drop_path[sum(dec_depths[:s]) : sum(dec_depths[: s + 1])]
                 dec_drop_path_.reverse()
                 dec = PointSequential()
                 dec.add(
