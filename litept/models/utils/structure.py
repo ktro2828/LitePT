@@ -1,9 +1,11 @@
 import spconv.pytorch as spconv
 import torch
 from addict import Dict
+from torch import nn
+
+from litept.models.scatter import argsort
 from litept.models.utils import batch2offset, offset2batch, offset2bincount
 from litept.models.utils.serialization import decode, encode
-from torch import nn
 
 
 def bit_length_tensor(x: torch.Tensor) -> torch.Tensor:
@@ -88,17 +90,16 @@ class Point(Dict):
         #  Order2 ([n]),
         #   ...
         #  OrderN ([n])] (k, n)
-        code = [
-            encode(self.grid_coord, self.batch, depth, order=order_) for order_ in order
-        ]
+        code = [encode(self.grid_coord, self.batch, depth, order=order_) for order_ in order]
         code = torch.stack(code)
-        order = torch.argsort(code)
+        if torch.onnx.is_in_onnx_export():
+            order = torch.stack([argsort(code_i) for code_i in code], dim=0)
+        else:
+            order = torch.argsort(code)
         inverse = torch.zeros_like(order).scatter_(
             dim=1,
             index=order,
-            src=torch.arange(0, code.shape[1], device=order.device).repeat(
-                code.shape[0], 1
-            ),
+            src=torch.arange(0, code.shape[1], device=order.device).repeat(code.shape[0], 1),
         )
 
         if shuffle_orders:
@@ -142,9 +143,7 @@ class Point(Dict):
         if "sparse_shape" in self.keys():
             sparse_shape = self.sparse_shape
         else:
-            sparse_shape = torch.add(
-                torch.max(self.grid_coord, dim=0).values, pad
-            ).tolist()
+            sparse_shape = torch.add(torch.max(self.grid_coord, dim=0).values, pad).tolist()
         sparse_conv_feat = spconv.SparseConvTensor(
             features=self.feat,
             indices=torch.cat(
@@ -186,9 +185,7 @@ class Point(Dict):
 
             if not export_mode:
                 _offset = nn.functional.pad(offset, (1, 0))
-                _offset_pad = nn.functional.pad(
-                    torch.cumsum(bincount_pad, dim=0), (1, 0)
-                )
+                _offset_pad = nn.functional.pad(torch.cumsum(bincount_pad, dim=0), (1, 0))
                 pad = torch.arange(_offset_pad[-1], device=offset.device)
                 unpad = torch.arange(_offset[-1], device=offset.device)
                 cu_seqlens = []
@@ -202,12 +199,9 @@ class Point(Dict):
                         ] = pad[
                             _offset_pad[i + 1]
                             - 2 * patch_size
-                            + (bincount[i] % patch_size) : _offset_pad[i + 1]
-                            - patch_size
+                            + (bincount[i] % patch_size) : _offset_pad[i + 1] - patch_size
                         ]
-                    pad[_offset_pad[i] : _offset_pad[i + 1]] -= (
-                        _offset_pad[i] - _offset[i]
-                    )
+                    pad[_offset_pad[i] : _offset_pad[i + 1]] -= _offset_pad[i] - _offset[i]
                     cu_seqlens.append(
                         torch.arange(
                             _offset_pad[i],
@@ -237,8 +231,7 @@ class Point(Dict):
                 ] = pad[
                     bincount_pad[0]
                     - 2 * self.patch_size
-                    + (bincount[0] % self.patch_size) : bincount_pad[0]
-                    - self.patch_size
+                    + (bincount[0] % self.patch_size) : bincount_pad[0] - self.patch_size
                 ]
 
                 cu_seqlens.append(

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import numpy as np
-import SparseConvolution  # noqa do not remove this line, it is required for onnx export
 import torch
 import torch.nn.functional as F
+from torch import nn
+
+import SparseConvolution  # noqa do not remove this line, it is required for onnx export
 from litept.engines.defaults import (
     default_argument_parser,
     default_config_parser,
@@ -12,7 +14,6 @@ from litept.engines.defaults import (
 from litept.engines.train import TRAINERS
 from litept.models.scatter import argsort
 from litept.models.utils.structure import Point, bit_length_tensor
-from torch import nn
 
 
 class LitePTONNX(nn.Module):
@@ -36,13 +37,9 @@ class LitePTONNX(nn.Module):
         self.model = model
         self.model.backbone.forward = self.model.backbone.export_forward
 
-        point_cloud_range = torch.tensor(
-            cfg.point_cloud_range, dtype=torch.float32
-        ).cuda()
+        point_cloud_range = torch.tensor(cfg.point_cloud_range, dtype=torch.float32).cuda()
         voxel_size = cfg.grid_size
-        voxel_size = torch.tensor(
-            [voxel_size, voxel_size, voxel_size], dtype=torch.float32
-        ).cuda()
+        voxel_size = torch.tensor([voxel_size, voxel_size, voxel_size], dtype=torch.float32).cuda()
 
         self.sparse_shape = (point_cloud_range[3:] - point_cloud_range[:3]) / voxel_size
         self.sparse_shape = torch.round(self.sparse_shape).long().cuda()
@@ -56,15 +53,13 @@ class LitePTONNX(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         shape = torch._shape_as_tensor(grid_coord).to(grid_coord.device)
 
-        serialized_order = torch.stack(
-            [argsort(code) for code in serialized_code], dim=0
-        )
+        serialized_order = torch.stack([argsort(code) for code in serialized_code], dim=0)
         serialized_inverse = torch.zeros_like(serialized_order).scatter_(
             dim=1,
             index=serialized_order,
-            src=torch.arange(
-                0, serialized_code.shape[1], device=serialized_order.device
-            ).repeat(serialized_code.shape[0], 1),
+            src=torch.arange(0, serialized_code.shape[1], device=serialized_order.device).repeat(
+                serialized_code.shape[0], 1
+            ),
         )
 
         input_dict = {
@@ -117,10 +112,7 @@ def main():
     with torch.no_grad():
         depth = bit_length_tensor(
             torch.tensor(
-                [
-                    (max(cfg.point_cloud_range) - min(cfg.point_cloud_range))
-                    / cfg.grid_size
-                ]
+                [(max(cfg.point_cloud_range) - min(cfg.point_cloud_range)) / cfg.grid_size]
             )
         ).cuda()
         point = Point(input_dict)
