@@ -52,6 +52,9 @@ no-build-isolation-package = [
   "pointgroup-ops",
 ]
 
+[tool.uv.extra-build-dependencies]
+pointrope = [{ requirement = "torch", match-runtime = true }]
+
 [tool.uv.sources]
 torch = [{ index = "pytorch-cu128", marker = "sys_platform == 'linux'" }]
 torchvision = [{ index = "pytorch-cu128", marker = "sys_platform == 'linux'" }]
