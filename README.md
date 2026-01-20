@@ -43,7 +43,7 @@ University of Zurich
 - Additional requirements.
   - For **instance segmentation**:
     ```shell
-    uv sync --extra instance
+    uv sync --extra insseg
     ```
 
 ### Use LitePT in Your Own Project
