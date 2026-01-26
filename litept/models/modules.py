@@ -110,7 +110,6 @@ class GridPooling(PointModule):
         traceable=True,  # record parent and cluster
         re_serialization=False,
         serialization_order="z",
-        export_mode=False,
     ):
         super().__init__()
         self.in_channels = in_channels
@@ -130,7 +129,6 @@ class GridPooling(PointModule):
 
         self.re_serialization = re_serialization
         self.serialization_order = serialization_order
-        self.export_mode = export_mode
 
     def forward(self, point: Point):
         if "grid_coord" in point.keys():
@@ -149,7 +147,7 @@ class GridPooling(PointModule):
         # Pack batch id into high bits for clustering.
         # NOTE: ONNX export does not support bitwise OR on non-boolean tensors.
         # Use arithmetic packing in export_mode, bitwise packing otherwise.
-        if self.export_mode:
+        if torch.onnx.is_in_onnx_export():
             # IMPORTANT:
             # Our export-friendly `unique()` / `argsort()` wrappers operate on 1D tensors.
             # `grid_coord` here is (N, 3). We must pack it into a single 1D key per point,
@@ -202,7 +200,7 @@ class GridPooling(PointModule):
         # head_indices of each cluster, for reduce attr e.g. code, batch
         head_indices = indices[idx_ptr[:-1]]
 
-        if not self.export_mode:
+        if not torch.onnx.is_in_onnx_export():
             scatter_feat = torch_scatter.segment_csr(
                 self.proj(point.feat)[indices], idx_ptr, reduce=self.reduce
             )
@@ -219,7 +217,7 @@ class GridPooling(PointModule):
         )
 
         if "origin_coord" in point.keys():
-            if not self.export_mode:
+            if not torch.onnx.is_in_onnx_export():
                 point_dict["origin_coord"] = torch_scatter.segment_csr(
                     point.origin_coord[indices], idx_ptr, reduce="mean"
                 )
@@ -236,7 +234,7 @@ class GridPooling(PointModule):
         if "split" in point.keys():
             point_dict["split"] = point.split
         if "color" in point.keys():
-            if not self.export_mode:
+            if not torch.onnx.is_in_onnx_export():
                 point_dict["color"] = torch_scatter.segment_csr(
                     point.color[indices], idx_ptr, reduce="mean"
                 )
@@ -245,7 +243,7 @@ class GridPooling(PointModule):
         if "grid_size" in point.keys():
             point_dict["grid_size"] = point.grid_size * self.stride
         if "mask" in point.keys():
-            if not self.export_mode:
+            if not torch.onnx.is_in_onnx_export():
                 point_dict["mask"] = (
                     torch_scatter.segment_csr(point.mask[indices].float(), idx_ptr, reduce="mean")
                     > 0.5

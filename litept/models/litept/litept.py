@@ -30,7 +30,6 @@ class PointROPEAttention(PointModule):
         attn_drop=0.0,
         proj_drop=0.0,
         order_index=0,
-        export_mode=False,
     ):
         super().__init__()
         assert channels % num_heads == 0
@@ -330,7 +329,6 @@ class LitePT(PointModule):
                         act_layer=act_layer,
                         re_serialization=enc_attn[s],
                         serialization_order=self.order,
-                        export_mode=self.export_mode,
                     ),
                     name="down",
                 )
@@ -419,26 +417,15 @@ class LitePT(PointModule):
         """
         point = Point(data_dict)
         if self.enc_attn[0]:
-            point.serialization(order=self.order, shuffle_orders=self.shuffle_orders)
-        point.sparsify()
-
-        point = self.embedding(point)
-        point = self.enc(point)
-
-        if not self.enc_mode:
-            point = self.dec(point)
-
-        return point
-
-    def export_forward(self, data_dict):
-        point = Point(data_dict)
-        if self.enc_attn[0]:
-            point["serialized_depth"] = data_dict["serialized_depth"]
-            point["serialized_depth"] = data_dict["serialized_depth"]
-            point["serialized_code"] = data_dict["serialized_code"]
-            point["serialized_order"] = data_dict["serialized_order"]
-            point["serialized_inverse"] = data_dict["serialized_inverse"]
-            point["sparse_shape"] = data_dict["sparse_shape"]
+            if torch.onnx.is_in_onnx_export():
+                point["serialized_depth"] = data_dict["serialized_depth"]
+                point["serialized_depth"] = data_dict["serialized_depth"]
+                point["serialized_code"] = data_dict["serialized_code"]
+                point["serialized_order"] = data_dict["serialized_order"]
+                point["serialized_inverse"] = data_dict["serialized_inverse"]
+                point["sparse_shape"] = data_dict["sparse_shape"]
+            else:
+                point.serialization(order=self.order, shuffle_orders=self.shuffle_orders)
         point.sparsify()
 
         point = self.embedding(point)

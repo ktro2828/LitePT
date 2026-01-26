@@ -35,7 +35,6 @@ class LitePTONNX(nn.Module):
         super().__init__()
         self.cfg = cfg
         self.model = model
-        self.model.backbone.forward = self.model.backbone.export_forward
 
         point_cloud_range = torch.tensor(cfg.point_cloud_range, dtype=torch.float32).cuda()
         voxel_size = cfg.grid_size
