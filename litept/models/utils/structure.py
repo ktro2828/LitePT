@@ -90,16 +90,20 @@ class Point(Dict):
         #  Order2 ([n]),
         #   ...
         #  OrderN ([n])] (k, n)
-        code = [encode(self.grid_coord, self.batch, depth, order=order_) for order_ in order]
-        code = torch.stack(code)
+        serialized_code = [
+            encode(self.grid_coord, self.batch, depth, order=order_) for order_ in order
+        ]
+        serialized_code = torch.stack(serialized_code)
         if torch.onnx.is_in_onnx_export():
-            order = torch.stack([argsort(code_i) for code_i in code], dim=0)
+            serialized_order = torch.stack([argsort(code_i) for code_i in serialized_code], dim=0)
         else:
-            order = torch.argsort(code)
-        inverse = torch.zeros_like(order).scatter_(
+            serialized_order = torch.argsort(serialized_code)
+        serialized_inverse = torch.zeros_like(serialized_order).scatter_(
             dim=1,
-            index=order,
-            src=torch.arange(0, code.shape[1], device=order.device).repeat(code.shape[0], 1),
+            index=serialized_order,
+            src=torch.arange(0, serialized_code.shape[1], device=serialized_order.device).repeat(
+                serialized_code.shape[0], 1
+            ),
         )
 
         if shuffle_orders:
@@ -108,16 +112,16 @@ class Point(Dict):
             if torch.onnx.is_in_onnx_export():
                 perm = None
             else:
-                perm = torch.randperm(code.shape[0])
+                perm = torch.randperm(serialized_code.shape[0])
 
             if perm is not None:
-                code = code[perm]
-                order = order[perm]
-                inverse = inverse[perm]
+                serialized_code = serialized_code[perm]
+                serialized_order = serialized_order[perm]
+                serialized_inverse = serialized_inverse[perm]
 
-        self["serialized_code"] = code
-        self["serialized_order"] = order
-        self["serialized_inverse"] = inverse
+        self["serialized_code"] = serialized_code
+        self["serialized_order"] = serialized_order
+        self["serialized_inverse"] = serialized_inverse
 
     def sparsify(self, pad: int = 96) -> None:
         """
