@@ -419,7 +419,6 @@ class LitePT(PointModule):
         if self.enc_attn[0]:
             if torch.onnx.is_in_onnx_export():
                 point["serialized_depth"] = data_dict["serialized_depth"]
-                point["serialized_depth"] = data_dict["serialized_depth"]
                 point["serialized_code"] = data_dict["serialized_code"]
                 point["serialized_order"] = data_dict["serialized_order"]
                 point["serialized_inverse"] = data_dict["serialized_inverse"]
