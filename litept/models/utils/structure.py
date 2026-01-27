@@ -157,9 +157,7 @@ class Point(Dict):
 
     @torch.no_grad()
     def get_padding_and_inverse(
-        self,
-        patch_size,
-        export_mode: bool = False,
+        self, patch_size
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         pad_key = "pad"
         unpad_key = "unpad"
@@ -183,7 +181,7 @@ class Point(Dict):
             mask_pad = bincount > patch_size
             bincount_pad = ~mask_pad * bincount + mask_pad * bincount_pad
 
-            if not export_mode:
+            if not torch.onnx.is_in_onnx_export():
                 _offset = nn.functional.pad(offset, (1, 0))
                 _offset_pad = nn.functional.pad(torch.cumsum(bincount_pad, dim=0), (1, 0))
                 pad = torch.arange(_offset_pad[-1], device=offset.device)
@@ -224,21 +222,19 @@ class Point(Dict):
                 unpad = torch.arange(offset[0], device=offset.device)
                 cu_seqlens = []
 
-                pad[
-                    bincount_pad[0]
-                    - self.patch_size
-                    + (bincount[0] % self.patch_size) : bincount_pad[0]
-                ] = pad[
-                    bincount_pad[0]
-                    - 2 * self.patch_size
-                    + (bincount[0] % self.patch_size) : bincount_pad[0] - self.patch_size
-                ]
+                pad[bincount_pad[0] - patch_size + (bincount[0] % patch_size) : bincount_pad[0]] = (
+                    pad[
+                        bincount_pad[0]
+                        - 2 * patch_size
+                        + (bincount[0] % patch_size) : bincount_pad[0] - patch_size
+                    ]
+                )
 
                 cu_seqlens.append(
                     torch.arange(
                         0,
                         bincount_pad[0],
-                        step=self.patch_size,
+                        step=patch_size,
                         dtype=torch.int32,
                         device=offset.device,
                     )
