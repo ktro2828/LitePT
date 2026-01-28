@@ -50,7 +50,7 @@ class Point(Dict):
     def serialization(
         self,
         order: str = "z",
-        depth: torch.Tensor | None = None,
+        depth: int | None = None,
         shuffle_orders: bool = False,
     ) -> None:
         """
@@ -73,12 +73,11 @@ class Point(Dict):
 
         if depth is None:
             # Adaptive measure the depth of serialization cube (length = 2 ^ depth)
-            # depth = int(self.grid_coord.max()).bit_length()
-            depth = bit_length_tensor(self.grid_coord.max())
+            depth = int(self.grid_coord.max() + 1).bit_length()
 
         self["serialized_depth"] = depth
         # Maximum bit length for serialization code is 63 (int64)
-        assert torch.all(depth * 3 + bit_length_tensor(self.offset) <= 63)
+        assert depth * 3 + len(self.offset).bit_length() <= 63
         # Here we follow OCNN and set the depth limitation to 16 (48bit) for the point position.
         # Although depth is limited to less than 16, we can encode a 655.36^3 (2^16 * 0.01) meter^3
         # cube with a grid size of 0.01 meter. We consider it is enough for the current stage.

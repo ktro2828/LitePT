@@ -88,47 +88,27 @@ def xyz2key(
     EX, EY, EZ = _key_lut.encode_lut(x.device)
     x, y, z = x.long(), y.long(), z.long()
 
-    # ONNX exporter (legacy) does not support bitwise AND/OR on non-boolean tensors.
-    # Provide an arithmetic fallback for export where we avoid AND/OR and use
-    # remainder + addition. We keep the exact same key layout as the bitwise path.
-    if torch.onnx.is_in_onnx_export():
-        # mask values in low bits using modulo (equivalent to x & ((1<<k)-1) for non-negative x)
-        if depth > 8:
-            mask_low = 255
-        else:
-            mask_low = (1 << depth) - 1
-
-        xm = torch.remainder(x, mask_low + 1)
-        ym = torch.remainder(y, mask_low + 1)
-        zm = torch.remainder(z, mask_low + 1)
-
-        key = EX[xm] + EY[ym] + EZ[zm]
-
-        if depth > 8:
-            mask_hi = (1 << (depth - 8)) - 1
-            xh = torch.remainder(torch.div(x, 256, rounding_mode="trunc"), mask_hi + 1)
-            yh = torch.remainder(torch.div(y, 256, rounding_mode="trunc"), mask_hi + 1)
-            zh = torch.remainder(torch.div(z, 256, rounding_mode="trunc"), mask_hi + 1)
-
-            key16 = EX[xh] + EY[yh] + EZ[zh]
-            key = key16 * (1 << 24) + key
-
-        if b is not None:
-            b = b.long()
-            key = b * (1 << 48) + key
-
-        return key
-
     mask = 255 if depth > 8 else (1 << depth) - 1
-    key = EX[x & mask] | EY[y & mask] | EZ[z & mask]
+    # NOTE(original): key = EX[x & mask] | EY[y & mask] | EZ[z & mask]
+    xm = torch.remainder(x, mask + 1)
+    ym = torch.remainder(y, mask + 1)
+    zm = torch.remainder(z, mask + 1)
+    key = EX[xm] + EY[ym] + EZ[zm]
     if depth > 8:
         mask = (1 << (depth - 8)) - 1
-        key16 = EX[(x >> 8) & mask] | EY[(y >> 8) & mask] | EZ[(z >> 8) & mask]
-        key = key16 << 24 | key
+        # NOTE(original)
+        #   key16 = EX[(x >> 8) & mask] | EY[(y >> 8) & mask] | EZ[(z >> 8) & mask]
+        #   key = key16 << 24 | key
+        xh = torch.remainder(torch.div(x, 256, rounding_mode="trunc"), mask + 1)
+        yh = torch.remainder(torch.div(y, 256, rounding_mode="trunc"), mask + 1)
+        zh = torch.remainder(torch.div(z, 256, rounding_mode="trunc"), mask + 1)
+        key16 = EX[xh] + EY[yh] + EZ[zh]
+        key = key16 * (1 << 24) + key
 
     if b is not None:
         b = b.long()
-        key = b << 48 | key
+        # NOTE(original): key = b << 48 | key
+        key = b << 48 + key
 
     return key
 

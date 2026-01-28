@@ -21,12 +21,8 @@ def encode(grid_coord, batch=None, depth=16, order="z"):
         raise NotImplementedError
     if batch is not None:
         batch = batch.long()
-        # ONNX export (legacy) does not support bitwise OR on non-boolean tensors.
-        # Pack as: batch * 2^(depth*3) + code.
-        if torch.onnx.is_in_onnx_export():
-            code = batch * (1 << (depth * 3)) + code
-        else:
-            code = (batch << (depth * 3)) | code
+        # NOTE(original): code = batch * (1 << (depth * 3)) | code
+        code = batch * (1 << (depth * 3)) + code
     return code
 
 

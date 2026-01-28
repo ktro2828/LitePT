@@ -146,37 +146,30 @@ class GridPooling(PointModule):
         grid_coord = torch.div(grid_coord, self.stride, rounding_mode="trunc")
 
         # Pack batch id and coordinates into a single 1D key for clustering.
-        # Use arithmetic packing for both ONNX export and regular inference
-        # to ensure numerical consistency.
-        #
-        # Key layout (all arithmetic; avoids bitwise ops for ONNX friendliness):
-        #   key = x + (y << 16) + (z << 32) + (batch << 48)
-        # This assumes x,y,z are in [0, 2^16).
+        # NOTE(original): grid_coord = torch.bitwise_or(grid_coord, point.batch.view(-1, 1) << 48)
         grid_coord_i = grid_coord.to(torch.int64)
-        x = grid_coord_i[:, 0]
-        y = grid_coord_i[:, 1]
-        z = grid_coord_i[:, 2]
+        gx = grid_coord_i[:, 0]
+        gy = grid_coord_i[:, 1]
+        gz = grid_coord_i[:, 2]
         b = point.batch.to(torch.int64)
-
-        packed = x + y * (1 << 16) + z * (1 << 32) + b * (1 << 48)
+        packed = gx + gy * (1 << 16) + gz * (1 << 32) + b * (1 << 48)
 
         if torch.onnx.is_in_onnx_export():
-            unique_keys, inverse_indices, counts, _ = unique(packed)
+            unique_keys, cluster, counts, _ = unique(packed)
             # Sort points by cluster id (inverse_indices) to make them contiguous per cluster.
-            indices = argsort(inverse_indices)
-            cluster = inverse_indices
+            indices = argsort(cluster)
         else:
-            unique_keys, inverse_indices, counts = torch.unique(
+            unique_keys, cluster, counts = torch.unique(
                 packed,
                 sorted=True,
                 return_inverse=True,
                 return_counts=True,
             )
-            cluster = inverse_indices
             # indices of point sorted by cluster, for torch_scatter.segment_csr
             _, indices = torch.sort(cluster)
 
-        # Unpack to (M, 3) grid coords (drop batch component).
+        # Unpack to (M, 3) grid coords (drop batch component)
+        # NOTE(original): grid_coord = torch.bitwise_and(grid_coord, ((1 << 48) - 1))
         key_wo_batch = torch.remainder(unique_keys, (1 << 48))
         gx = torch.remainder(key_wo_batch, (1 << 16))
         gy = torch.remainder(torch.div(key_wo_batch, (1 << 16), rounding_mode="trunc"), (1 << 16))
