@@ -13,6 +13,10 @@ from litept.engines.defaults import (
 )
 from litept.engines.train import TRAINERS
 from litept.models.utils.structure import Point, bit_length_tensor
+from litept.utils.logger import get_root_logger
+from litept.utils.visualization import get_segmentation_colors, visualize_point_cloud
+
+logger = get_root_logger()
 
 
 class LitePTONNX(nn.Module):
@@ -115,11 +119,18 @@ def main():
 
         pred_labels, pred_probs = model(input_dict["grid_coord"], input_dict["feat"])
 
+        sample_filepath = "litept_sample.npz"
         np.savez_compressed(
-            "litept_sample.npz",
+            sample_filepath,
             pred=pred_labels.cpu().numpy(),
             feat=input_dict["feat"].cpu().numpy(),
         )
+        if cfg.get("show", False):
+            # visualize sample
+            coords, colors = get_segmentation_colors(
+                pred_labels.cpu().numpy(), sample_filepath, cfg.class_colors, logger
+            )
+            visualize_point_cloud(coords, colors, "Predictions")
 
         export_params = True
         keep_initializers_as_inputs = False
