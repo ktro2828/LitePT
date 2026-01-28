@@ -12,7 +12,6 @@ from litept.engines.defaults import (
     default_setup,
 )
 from litept.engines.train import TRAINERS
-from litept.models.scatter import argsort
 from litept.models.utils.structure import Point, bit_length_tensor
 
 
@@ -47,29 +46,14 @@ class LitePTONNX(nn.Module):
         self,
         grid_coord: torch.Tensor,
         feat: torch.Tensor,
-        serialized_depth: torch.Tensor,
-        serialized_code: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         shape = torch._shape_as_tensor(grid_coord).to(grid_coord.device)
-
-        serialized_order = torch.stack([argsort(code) for code in serialized_code], dim=0)
-        serialized_inverse = torch.zeros_like(serialized_order).scatter_(
-            dim=1,
-            index=serialized_order,
-            src=torch.arange(0, serialized_code.shape[1], device=serialized_order.device).repeat(
-                serialized_code.shape[0], 1
-            ),
-        )
 
         input_dict = {
             "coord": feat[:, :3],
             "grid_coord": grid_coord,
             "offset": shape[:1],
             "feat": feat,
-            "serialized_depth": serialized_depth,
-            "serialized_code": serialized_code,
-            "serialized_order": serialized_order,
-            "serialized_inverse": serialized_inverse,
             "sparse_shape": self.sparse_shape,
         }
         output = self.model(input_dict)
@@ -129,7 +113,7 @@ def main():
         input_dict.pop("inverse")
         input_dict.pop("offset")
 
-        pred_labels, pred_probs = model(**input_dict)
+        pred_labels, pred_probs = model(input_dict["grid_coord"], input_dict["feat"])
 
         np.savez_compressed(
             "litept_sample.npz",
@@ -140,7 +124,7 @@ def main():
         export_params = True
         keep_initializers_as_inputs = False
         opset_version = 17
-        input_names = ["grid_coord", "feat", "serialized_depth", "serialized_code"]
+        input_names = ["grid_coord", "feat"]
         output_names = ["pred_label", "pred_score"]
         dynamic_axes = {
             "grid_coord": {
@@ -149,17 +133,12 @@ def main():
             "feat": {
                 0: "voxels_num",
             },
-            "serialized_code": {
-                1: "voxels_num",
-            },
         }
         torch.onnx.export(
             model,
             (
                 input_dict["grid_coord"],
                 input_dict["feat"],
-                input_dict["serialized_depth"],
-                input_dict["serialized_code"],
             ),
             "litept.onnx",
             export_params=export_params,

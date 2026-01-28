@@ -417,14 +417,7 @@ class LitePT(PointModule):
         """
         point = Point(data_dict)
         if self.enc_attn[0]:
-            if torch.onnx.is_in_onnx_export():
-                point["serialized_depth"] = data_dict["serialized_depth"]
-                point["serialized_code"] = data_dict["serialized_code"]
-                point["serialized_order"] = data_dict["serialized_order"]
-                point["serialized_inverse"] = data_dict["serialized_inverse"]
-                point["sparse_shape"] = data_dict["sparse_shape"]
-            else:
-                point.serialization(order=self.order, shuffle_orders=self.shuffle_orders)
+            point.serialization(order=self.order, shuffle_orders=self.shuffle_orders)
         point.sparsify()
 
         point = self.embedding(point)
