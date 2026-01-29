@@ -14,7 +14,10 @@ import open3d as o3d
 
 
 def create_colors_from_predictions(
-    predictions: npt.NDArray, num_points: int, class_colors: Dict[int, npt.NDArray], logger: logging.Logger
+    predictions: npt.NDArray,
+    num_points: int,
+    class_colors: Dict[int, npt.NDArray],
+    logger: logging.Logger,
 ) -> npt.NDArray:
     """Create RGB colors from predictions using class color mapping.
 
@@ -29,7 +32,7 @@ def create_colors_from_predictions(
 
     colors = np.zeros((num_points, 3), dtype=np.uint8)
     for i, pred_class in enumerate(predictions):
-        if pred_class < len(class_colors):
+        if pred_class < len(class_colors) and pred_class != -1:
             colors[i] = class_colors[pred_class]
         else:
             colors[i] = (255, 255, 255)  # white for unknown classes
@@ -49,7 +52,9 @@ def visualize_point_cloud(coords: npt.NDArray, colors: npt.NDArray, title: str):
     # Create Open3D point cloud
     pcd = o3d.geometry.PointCloud()
     pcd.points = o3d.utility.Vector3dVector(coords[:, :3])  # Use first 3 coordinates (x, y, z)
-    pcd.colors = o3d.utility.Vector3dVector(colors.astype(np.float64) / 255.0)  # Normalize to [0, 1]
+    pcd.colors = o3d.utility.Vector3dVector(
+        colors.astype(np.float64) / 255.0
+    )  # Normalize to [0, 1]
 
     o3d.visualization.draw_geometries(
         [pcd],

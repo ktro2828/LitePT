@@ -1,5 +1,4 @@
 import torch.nn as nn
-
 from litept.models.losses import build_criteria
 from litept.models.utils.structure import Point
 

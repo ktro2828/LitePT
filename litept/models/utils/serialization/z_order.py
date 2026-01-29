@@ -89,15 +89,26 @@ def xyz2key(
     x, y, z = x.long(), y.long(), z.long()
 
     mask = 255 if depth > 8 else (1 << depth) - 1
-    key = EX[x & mask] | EY[y & mask] | EZ[z & mask]
+    # NOTE(original): key = EX[x & mask] | EY[y & mask] | EZ[z & mask]
+    xm = torch.remainder(x, mask + 1)
+    ym = torch.remainder(y, mask + 1)
+    zm = torch.remainder(z, mask + 1)
+    key = EX[xm] + EY[ym] + EZ[zm]
     if depth > 8:
         mask = (1 << (depth - 8)) - 1
-        key16 = EX[(x >> 8) & mask] | EY[(y >> 8) & mask] | EZ[(z >> 8) & mask]
-        key = key16 << 24 | key
+        # NOTE(original)
+        #   key16 = EX[(x >> 8) & mask] | EY[(y >> 8) & mask] | EZ[(z >> 8) & mask]
+        #   key = key16 << 24 | key
+        xh = torch.remainder(torch.div(x, 256, rounding_mode="trunc"), mask + 1)
+        yh = torch.remainder(torch.div(y, 256, rounding_mode="trunc"), mask + 1)
+        zh = torch.remainder(torch.div(z, 256, rounding_mode="trunc"), mask + 1)
+        key16 = EX[xh] + EY[yh] + EZ[zh]
+        key = key16 * (1 << 24) + key
 
     if b is not None:
         b = b.long()
-        key = b << 48 | key
+        # NOTE(original): key = b << 48 | key
+        key = b << 48 + key
 
     return key
 

@@ -9,6 +9,10 @@ enable_amp = True
 
 save_path = "exp/nuscenes/semseg-litept-small-v1m1"
 
+# (min_x, min_y, min_z, max_x, max_y, max_z)
+point_cloud_range = [-76.8, -76.8, -4, 76.8, 76.8, 8]
+grid_size = 0.05
+
 # model settings
 model = dict(
     type="DefaultSegmentorV2",
@@ -85,6 +89,24 @@ names = [
     "manmade",
     "vegetation",
 ]
+class_mapping = {
+    "barrier": 0,
+    "bicycle": 1,
+    "bus": 2,
+    "car": 3,
+    "construction_vehicle": 4,
+    "motorcycle": 5,
+    "pedestrian": 6,
+    "traffic_cone": 7,
+    "trailer": 8,
+    "truck": 9,
+    "driveable_surface": 10,
+    "other_flat": 11,
+    "sidewalk": 12,
+    "terrain": 13,
+    "manmade": 14,
+    "vegetation": 15,
+}
 
 data = dict(
     num_classes=16,

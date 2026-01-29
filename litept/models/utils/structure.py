@@ -3,13 +3,14 @@ import torch
 from addict import Dict
 from torch import nn
 
+from litept.models.scatter import argsort
 from litept.models.utils import batch2offset, offset2batch, offset2bincount
 from litept.models.utils.serialization import decode, encode
 
 
 def bit_length_tensor(x: torch.Tensor) -> torch.Tensor:
     # Ensure x is a positive integer tensor
-    x = torch.clamp(x, min=1)
+    x = torch.clamp(x, min=1).float()
     return torch.floor(torch.log2(x)).to(torch.int64) + 1
 
 
@@ -73,6 +74,7 @@ class Point(Dict):
         if depth is None:
             # Adaptive measure the depth of serialization cube (length = 2 ^ depth)
             depth = int(self.grid_coord.max() + 1).bit_length()
+
         self["serialized_depth"] = depth
         # Maximum bit length for serialization code is 63 (int64)
         assert depth * 3 + len(self.offset).bit_length() <= 63
@@ -87,28 +89,38 @@ class Point(Dict):
         #  Order2 ([n]),
         #   ...
         #  OrderN ([n])] (k, n)
-        code = [
+        serialized_code = [
             encode(self.grid_coord, self.batch, depth, order=order_) for order_ in order
         ]
-        code = torch.stack(code)
-        order = torch.argsort(code)
-        inverse = torch.zeros_like(order).scatter_(
+        serialized_code = torch.stack(serialized_code)
+        if torch.onnx.is_in_onnx_export():
+            serialized_order = torch.stack([argsort(code_i) for code_i in serialized_code], dim=0)
+        else:
+            serialized_order = torch.argsort(serialized_code)
+        serialized_inverse = torch.zeros_like(serialized_order).scatter_(
             dim=1,
-            index=order,
-            src=torch.arange(0, code.shape[1], device=order.device).repeat(
-                code.shape[0], 1
+            index=serialized_order,
+            src=torch.arange(0, serialized_code.shape[1], device=serialized_order.device).repeat(
+                serialized_code.shape[0], 1
             ),
         )
 
         if shuffle_orders:
-            perm = torch.randperm(code.shape[0])
-            code = code[perm]
-            order = order[perm]
-            inverse = inverse[perm]
+            # ONNX export does not support `aten::randperm`.
+            # Serialization order shuffling is only a training-time augmentation, so disable it for export.
+            if torch.onnx.is_in_onnx_export():
+                perm = None
+            else:
+                perm = torch.randperm(serialized_code.shape[0])
 
-        self["serialized_code"] = code
-        self["serialized_order"] = order
-        self["serialized_inverse"] = inverse
+            if perm is not None:
+                serialized_code = serialized_code[perm]
+                serialized_order = serialized_order[perm]
+                serialized_inverse = serialized_inverse[perm]
+
+        self["serialized_code"] = serialized_code
+        self["serialized_order"] = serialized_order
+        self["serialized_inverse"] = serialized_inverse
 
     def sparsify(self, pad: int = 96) -> None:
         """
@@ -134,9 +146,7 @@ class Point(Dict):
         if "sparse_shape" in self.keys():
             sparse_shape = self.sparse_shape
         else:
-            sparse_shape = torch.add(
-                torch.max(self.grid_coord, dim=0).values, pad
-            ).tolist()
+            sparse_shape = torch.add(torch.max(self.grid_coord, dim=0).values, pad).tolist()
         sparse_conv_feat = spconv.SparseConvTensor(
             features=self.feat,
             indices=torch.cat(
@@ -173,36 +183,70 @@ class Point(Dict):
             # only pad point when num of points larger than patch_size
             mask_pad = bincount > patch_size
             bincount_pad = ~mask_pad * bincount + mask_pad * bincount_pad
-            _offset = nn.functional.pad(offset, (1, 0))
-            _offset_pad = nn.functional.pad(torch.cumsum(bincount_pad, dim=0), (1, 0))
-            pad = torch.arange(_offset_pad[-1], device=offset.device)
-            unpad = torch.arange(_offset[-1], device=offset.device)
-            cu_seqlens = []
-            for i in range(len(offset)):
-                unpad[_offset[i] : _offset[i + 1]] += _offset_pad[i] - _offset[i]
-                if bincount[i] != bincount_pad[i]:
+
+            if not torch.onnx.is_in_onnx_export():
+                _offset = nn.functional.pad(offset, (1, 0))
+                _offset_pad = nn.functional.pad(torch.cumsum(bincount_pad, dim=0), (1, 0))
+                pad = torch.arange(_offset_pad[-1], device=offset.device)
+                unpad = torch.arange(_offset[-1], device=offset.device)
+                cu_seqlens = []
+                for i in range(len(offset)):
+                    unpad[_offset[i] : _offset[i + 1]] += _offset_pad[i] - _offset[i]
+                    if bincount[i] != bincount_pad[i]:
+                        pad[
+                            _offset_pad[i + 1]
+                            - patch_size
+                            + (bincount[i] % patch_size) : _offset_pad[i + 1]
+                        ] = pad[
+                            _offset_pad[i + 1]
+                            - 2 * patch_size
+                            + (bincount[i] % patch_size) : _offset_pad[i + 1] - patch_size
+                        ]
+                    pad[_offset_pad[i] : _offset_pad[i + 1]] -= _offset_pad[i] - _offset[i]
+                    cu_seqlens.append(
+                        torch.arange(
+                            _offset_pad[i],
+                            _offset_pad[i + 1],
+                            step=patch_size,
+                            dtype=torch.int32,
+                            device=offset.device,
+                        )
+                    )
+                self[pad_key] = pad
+                self[unpad_key] = unpad
+                self[cu_seqlens_key] = nn.functional.pad(
+                    torch.concat(cu_seqlens), (0, 1), value=_offset_pad[-1]
+                )
+            else:
+                # NOTE: needed due to tensorrt reasons
+                assert len(offset) == 1
+
+                pad = torch.arange(bincount_pad[0], device=offset.device)
+                unpad = torch.arange(offset[0], device=offset.device)
+                cu_seqlens = []
+
+                pad[bincount_pad[0] - patch_size + (bincount[0] % patch_size) : bincount_pad[0]] = (
                     pad[
-                        _offset_pad[i + 1]
-                        - patch_size
-                        + (bincount[i] % patch_size) : _offset_pad[i + 1]
-                    ] = pad[
-                        _offset_pad[i + 1]
+                        bincount_pad[0]
                         - 2 * patch_size
-                        + (bincount[i] % patch_size) : _offset_pad[i + 1] - patch_size
+                        + (bincount[0] % patch_size) : bincount_pad[0] - patch_size
                     ]
-                pad[_offset_pad[i] : _offset_pad[i + 1]] -= _offset_pad[i] - _offset[i]
+                )
+
                 cu_seqlens.append(
                     torch.arange(
-                        _offset_pad[i],
-                        _offset_pad[i + 1],
+                        0,
+                        bincount_pad[0],
                         step=patch_size,
                         dtype=torch.int32,
                         device=offset.device,
                     )
                 )
-            self[pad_key] = pad
-            self[unpad_key] = unpad
-            self[cu_seqlens_key] = nn.functional.pad(
-                torch.concat(cu_seqlens), (0, 1), value=_offset_pad[-1]
-            )
+
+                self[pad_key] = pad
+                self[unpad_key] = unpad
+                self[cu_seqlens_key] = nn.functional.pad(
+                    torch.concat(cu_seqlens), (0, 1), value=bincount_pad[0]
+                )
+
         return self[pad_key], self[unpad_key], self[cu_seqlens_key]

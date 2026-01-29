@@ -1,9 +1,11 @@
 from functools import partial
 
 import flash_attn
-import spconv.pytorch as spconv
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+from timm.layers import DropPath
+
 from libs.pointrope import PointROPE
 from litept.models.builder import MODELS
 from litept.models.modules import (
@@ -14,7 +16,6 @@ from litept.models.modules import (
     PointSequential,
 )
 from litept.models.utils.structure import Point
-from timm.layers import DropPath
 
 
 class PointROPEAttention(PointModule):
@@ -43,7 +44,6 @@ class PointROPEAttention(PointModule):
         self.qkv = torch.nn.Linear(channels, channels * 3, bias=qkv_bias)
         self.proj = torch.nn.Linear(channels, channels)
         self.proj_drop = torch.nn.Dropout(proj_drop)
-        self.softmax = torch.nn.Softmax(dim=-1)
 
         # pointrope
         self.rope = PointROPE(freq=rope_freq)
@@ -83,13 +83,22 @@ class PointROPEAttention(PointModule):
             dim=1,
         )  # [N, 3, H, head_dim]
 
-        feat = flash_attn.flash_attn_varlen_qkvpacked_func(
-            qkv_rotated,
-            cu_seqlens,
-            max_seqlen=self.patch_size,
-            dropout_p=self.attn_drop if self.training else 0,
-            softmax_scale=self.scale,
-        ).reshape(-1, C)
+        if torch.onnx.is_in_onnx_export():
+            assert (qkv_rotated.shape[0] % K) == 0
+            # encode and reshape qkv: (N', K, 3, H, C') => (3, N', H, K, C')
+            q, k, v = qkv_rotated.reshape(-1, K, 3, H, C // H).permute(2, 0, 3, 1, 4).unbind(dim=0)
+            # attn
+            attn = (q * self.scale) @ k.transpose(-2, -1)  # (N', H, K, K)
+            attn = F.softmax(attn, dim=-1)
+            feat = (attn @ v).transpose(1, 2).reshape(-1, C)
+        else:
+            feat = flash_attn.flash_attn_varlen_qkvpacked_func(
+                qkv_rotated,
+                cu_seqlens,
+                max_seqlen=self.patch_size,
+                dropout_p=self.attn_drop if self.training else 0,
+                softmax_scale=self.scale,
+            ).reshape(-1, C)
 
         feat = feat.to(qkv.dtype)
         feat = feat[inverse]
@@ -147,17 +156,24 @@ class Block(PointModule):
         enable_conv=True,
         enable_attn=True,
         rope_freq=100.0,
+        export_mode=False,
     ):
         super().__init__()
         self.channels = channels
         self.pre_norm = pre_norm
+        self.export_mode = export_mode
 
         self.enable_conv = enable_conv
         self.enable_attn = enable_attn
 
         if self.enable_conv:
+            if export_mode:
+                from SparseConvolution.sparse_conv import SubMConv3d
+            else:
+                from spconv.pytorch import SubMConv3d
+
             self.conv = PointSequential(
-                spconv.SubMConv3d(
+                SubMConv3d(
                     channels,
                     channels,
                     kernel_size=3,
@@ -258,12 +274,14 @@ class LitePT(PointModule):
         pre_norm=True,
         shuffle_orders=True,
         enc_mode=False,
+        export_mode=False,
     ):
         super().__init__()
         self.num_stages = len(enc_depths)
         self.order = [order] if isinstance(order, str) else order
         self.enc_mode = enc_mode
         self.shuffle_orders = shuffle_orders
+        self.export_mode = export_mode
 
         self.enc_conv = enc_conv
         self.enc_attn = enc_attn
@@ -292,17 +310,14 @@ class LitePT(PointModule):
             embed_channels=enc_channels[0],
             norm_layer=bn_layer,
             act_layer=act_layer,
+            export_mode=self.export_mode,
         )
 
         # encoder
-        enc_drop_path = [
-            x.item() for x in torch.linspace(0, drop_path, sum(enc_depths))
-        ]
+        enc_drop_path = [x.item() for x in torch.linspace(0, drop_path, sum(enc_depths))]
         self.enc = PointSequential()
         for s in range(self.num_stages):
-            enc_drop_path_ = enc_drop_path[
-                sum(enc_depths[:s]) : sum(enc_depths[: s + 1])
-            ]
+            enc_drop_path_ = enc_drop_path[sum(enc_depths[:s]) : sum(enc_depths[: s + 1])]
             enc = PointSequential()
             if s > 0:
                 enc.add(
@@ -337,6 +352,7 @@ class LitePT(PointModule):
                         enable_conv=enc_conv[s],
                         enable_attn=enc_attn[s],
                         rope_freq=enc_rope_freq[s],
+                        export_mode=self.export_mode,
                     ),
                     name=f"block{i}",
                 )
@@ -345,15 +361,11 @@ class LitePT(PointModule):
 
         # decoder
         if not self.enc_mode:
-            dec_drop_path = [
-                x.item() for x in torch.linspace(0, drop_path, sum(dec_depths))
-            ]
+            dec_drop_path = [x.item() for x in torch.linspace(0, drop_path, sum(dec_depths))]
             self.dec = PointSequential()
             dec_channels = list(dec_channels) + [enc_channels[-1]]
             for s in reversed(range(self.num_stages - 1)):
-                dec_drop_path_ = dec_drop_path[
-                    sum(dec_depths[:s]) : sum(dec_depths[: s + 1])
-                ]
+                dec_drop_path_ = dec_drop_path[sum(dec_depths[:s]) : sum(dec_depths[: s + 1])]
                 dec_drop_path_.reverse()
                 dec = PointSequential()
                 dec.add(
@@ -386,6 +398,7 @@ class LitePT(PointModule):
                             enable_conv=dec_conv[s],
                             enable_attn=dec_attn[s],
                             rope_freq=dec_rope_freq[s],
+                            export_mode=self.export_mode,
                         ),
                         name=f"block{i}",
                     )

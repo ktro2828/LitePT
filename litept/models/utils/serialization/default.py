@@ -21,7 +21,8 @@ def encode(grid_coord, batch=None, depth=16, order="z"):
         raise NotImplementedError
     if batch is not None:
         batch = batch.long()
-        code = batch << depth * 3 | code
+        # NOTE(original): code = batch * (1 << (depth * 3)) | code
+        code = batch * (1 << (depth * 3)) + code
     return code
 
 
